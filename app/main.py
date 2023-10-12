@@ -1,6 +1,6 @@
 from flask import Flask, request
 import redis
-from rq import Queue, command
+from rq import Queue, command, cancel_job
 import sys
 import datetime
 import json
@@ -157,9 +157,6 @@ def remove_similar_jobs(payload, matching_fields):
                         except KeyError:
                             pass
                     if all(similar):
-                        if job.is_started:
-                            command.send_stop_job_command(r, job.id)
-                            print(f"SENT STOP COMMAND FOR STARTED JOB JOB {job.id} ({job.get_status()})", file=sys.stderr)
                         job.cancel()
                         print(f"CANCELLED JOB {job.id} ({job.get_status()}) DUE TO BEING SIMILAR: ", payload, old_payload, file=sys.stderr)
 
