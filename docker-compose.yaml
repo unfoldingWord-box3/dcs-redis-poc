@@ -1,0 +1,42 @@
+version: '3'
+services:
+    redis:
+        image: redis:4.0.6-alpine
+        ports:
+          - "6379:6379"
+        volumes:
+            - ./redis:/redis
+
+    flask-app:
+        image: app-image
+        container_name: flask-app
+        build: 
+            context: app
+            dockerfile: Dockerfile
+        restart: always
+        ports:
+            - '4000:5000'
+        volumes:
+            - ./app:/app
+
+    worker1:
+        image: app-image:latest
+        volumes:
+            - ./app:/app
+        depends_on:
+            - redis
+            - flask-app
+        command: rq worker --url redis://redis:6379 --with-scheduler door43-job-handler
+        links:
+            - redis
+
+    worker2:
+        image: app-image:latest
+        volumes:
+            - ./app:/app
+        depends_on:
+            - redis
+            - flask-app
+        command: rq worker --url redis://redis:6379 --with-scheduler tx-job-handler
+        links:
+            - redis
