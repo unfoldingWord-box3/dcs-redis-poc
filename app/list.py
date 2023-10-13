@@ -5,16 +5,14 @@ import datetime
 import json
 from functools import reduce
 
-r = redis.Redis(port=6379, db=0)
-djh_queue = Queue('door43-job-handler', connection=r)
-tjh_queue = Queue('tx-job-handler', connection=r)
+r = redis.Redis(host='dcs-tx.zwea7b.ng.0001.usw2.cache.amazonaws.com', port=6379, db=0)
+# djh_queue = Queue('door43-job-handler', connection=r)
+# tjh_queue = Queue('tx-job-handler', connection=r)
 
 def run():
-    print(djh_queue, tjh_queue, file=sys.stderr)
-
-    f = open('./payload.json')
-    default_payload = f.read()
-    f.close()
+    # f = open('./payload.json')
+    # default_payload = f.read()
+    # f.close()
 
     # delayStr = request.form.get('delay', 10)
     # is_user_branch = request.form.get('is_user_branch', False)
@@ -31,7 +29,7 @@ def run():
     #     if job:
     #         print(f"Status: {'Scheduled' if is_user_branch else 'Queued'} new job: {job.id}") 
 
-    for queue in [djh_queue, tjh_queue]:
+    for queue in Queue.all(connection=r):
         print(f"{queue.name} Registries:")
         
         print(f"Queued Jobs:")
