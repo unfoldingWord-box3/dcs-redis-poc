@@ -41,7 +41,7 @@ def index():
 </form>'''
 
     if request.method == 'POST':
-        job = queue_new_job(delay, payload, is_user_branch)
+        job = queue_new_job(delay, payload, is_user_branch, schedule_seconds)
         if job:
             html += f"<p><b>Status:</b> {'Scheduled' if is_user_branch else 'Queued'} new job: {job.id}</p>" 
 
@@ -123,12 +123,12 @@ def getJob(job_id):
         return f'<center><br /><br /><h3>The job is still pending</h3><br /><br />ID:{job_id}<br />Queued at: {res.enqueued_at}<br />Status: {res._status}</center><b>{res.args[1]}</b>'
     return f'<center><br /><br /><img src="{res.result}" height="200px"><br /><br />ID:{job_id}<br />Queued at: {res.enqueued_at}<br />Finished at: {res.ended_at}</center><b>{res.args[1]}</b>'
 
-def queue_new_job(delay, payload, is_user_branch):
+def queue_new_job(delay, payload, is_user_branch, schedule_seconds):
     remove_similar_jobs(payload, ["ref", "repo.full_name"])
     try:
         print(f"DELAY: {delay}", file=sys.stderr)
         if is_user_branch:
-            job = djh_queue.enqueue_in(datetime.timedelta(seconds=delay), "webhook.job", delay, payload)
+            job = djh_queue.enqueue_in(datetime.timedelta(seconds=schedule_seconds), "webhook.job", delay, payload)
         else:
             job = djh_queue.enqueue("webhook.job", delay, payload)
     except Exception as e:
