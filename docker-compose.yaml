@@ -26,7 +26,7 @@ services:
         depends_on:
             - redis
             - flask-app
-        command: rq worker --url redis://redis:6379 --with-scheduler door43-job-handler
+        command: rq worker --url redis://redis:6379 --with-scheduler door43_job_handler
         links:
             - redis
 
@@ -37,6 +37,6 @@ services:
         depends_on:
             - redis
             - flask-app
-        command: rq worker --url redis://redis:6379 --with-scheduler tx-job-handler
+        command: rq worker --url redis://redis:6379 --with-scheduler tx_job_handler
         links:
             - redis

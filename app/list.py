@@ -5,7 +5,7 @@ import datetime
 import json
 from functools import reduce
 
-r = redis.Redis(host='dcs-tx.zwea7b.ng.0001.usw2.cache.amazonaws.com', port=6379, db=0)
+r = redis.Redis(port=6379, db=0)
 # djh_queue = Queue('door43-job-handler', connection=r)
 # tjh_queue = Queue('tx-job-handler', connection=r)
 
@@ -44,7 +44,7 @@ def run():
         for id in queue.scheduled_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                print(f"{id}: {job.is_scheduled}")
+                print(f"{id}: {job.args[1]['repository']['full_name']}, {job.args[1]['ref']}")
         print(f"Total {n} Jobs scheduled\n")
 
         print(f"Started Jobs:")
@@ -52,7 +52,7 @@ def run():
         for id in queue.started_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                print(f"{id}: {job.is_started}")
+                print(f"{id}: {job.args[1]['repository']['full_name']}, {job.args[1]['ref']}")
         print(f"Total {n} Jobs started\n")
 
         print(f"Finished Jobs:")
@@ -60,7 +60,7 @@ def run():
         for id in queue.finished_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                print(f"{id}: {job.is_finished}")
+                print(f"{id}: {job.args[1]['repository']['full_name']}, {job.args[1]['ref']}")
         print(f"Total {n} Jobs finished\n")
 
         print(f"Canceled Jobs:")
@@ -68,7 +68,7 @@ def run():
         for id in queue.canceled_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                print(f"{id}: {job.is_canceled}")
+                print(f"{id}: {job.args[1]['repository']['full_name']}, {job.args[1]['ref']}")
         print(f"Total {n} Jobs canceled\n")
 
         print(f"Failed Jobs:")
@@ -76,7 +76,7 @@ def run():
         for id in queue.failed_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                print(f"{id}: {job.is_failed}")
+                print(f"{id}: {job.args[1]['repository']['full_name']}, {job.args[1]['ref']}")
         print(f"Total {n} Jobs failed\n")
 
         print(f"ALL Jobs:")

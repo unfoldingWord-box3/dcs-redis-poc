@@ -8,12 +8,12 @@ from functools import reduce
 
 app = Flask(__name__)
 
-r = redis.Redis(host='redis', port=6379, db=0)
-djh_queue = Queue('door43-job-handler', connection=r)
-tjh_queue = Queue('tx-job-handler', connection=r)
+redis_connection = redis.Redis(host='redis', port=6379, db=0)
+djh_queue = Queue('door43_job_handler', connection=redis_connection)
+tjh_queue = Queue('tx_job_handler', connection=redis_connection)
 
 @app.route('/', methods = ['POST', 'GET'])
-def index():
+def status():
     print(djh_queue, tjh_queue, file=sys.stderr)
 
     f = open('./payload.json')
@@ -22,7 +22,7 @@ def index():
 
     delayStr = request.form.get('delay', 10)
     is_user_branch = request.form.get('is_user_branch', False)
-    schedule_seconds = request.form.get('schedule_seconds', 10)
+    scheduleSecondsStr = request.form.get('schedule_seconds', 10)
     payload = json.loads(request.form.get('payload', default_payload))
 
     try:
@@ -30,111 +30,184 @@ def index():
     except:
         delay = 10
 
+    try:
+        schedule_seconds = int(scheduleSecondsStr)
+    except:
+        schedule_seconds = 10
+
     html = f'''
 <form method="POST">Time Working: <input type="text" name="delay" value="{delayStr}" />
     <br/>
     <input type="checkbox" name="is_user_branch" checked="{is_user_branch}"/> Is user branch, schedule for <input type="text" name="schedule_seconds" value="{schedule_seconds}" /> seconds
     <br/>
-    Payload:<br/><textarea name="payload" rows=5 cols="50">{json.dumps(payload, indent=2)}</textarea>
+    Payload:<br/><textarea name="payload" rows=5 cols="50">{json.dumps(payload) if payload else ""}</textarea>
     <br/>
     <input type="submit" value="Queue Job"/>
 </form>'''
 
     if request.method == 'POST':
-        job = queue_new_job(delay, payload, is_user_branch, schedule_seconds)
+        payload['delay'] = delay
+        job = queue_new_job(payload, is_user_branch, schedule_seconds)
         if job:
             html += f"<p><b>Status:</b> {'Scheduled' if is_user_branch else 'Queued'} new job: {job.id}</p>" 
 
-    for queue in [djh_queue, tjh_queue]:
-        html += f'<div style="float:left; padding-right: 10px"><center><h3>{queue.name} Registries:</h3></center>'
-        
-        html += '<p style="min-height: 100px"><b>Queued Jobs:</b><br/><br/>'
-        n = len(queue.get_jobs())
-        for job in queue.get_jobs():
-            if job:
-                html += f'<a href="job/{job.id}">{job.id}</a><br /><br />'
-        html += f'Total {n} Jobs in queue</p><hr /><br />'
-
-        html += '<p style="min-height: 100px"><b>Scheduled Jobs:</b><br /><br />'
-        n = len(queue.scheduled_job_registry.get_job_ids())
+    queue_names = ["door43_job_handler", "tx_job_handler"]
+    status_order = ["scheduled", "enqueued", "started", "finished", "failed", 'canceled']
+    rows = {}
+    for q_name in queue_names:
+        queue = Queue(q_name, connection=redis_connection)
+        rows[q_name] = {}
+        for status in status_order:
+            rows[q_name][status] = {}
         for id in queue.scheduled_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                html += f'<a href="job/{id}">{id}: {job.is_scheduled}</a><br /><br />'
-        html += f'Total {n} Jobs scheduled </center><p/><hr /><br />'
-
-        html += '<p style="min-height: 100px"><b>Started Jobs:</b><br /><br />'
-        n = len(queue.started_job_registry.get_job_ids())
+                rows[q_name]["scheduled"][job.created_at.strftime(f'%Y-%m-%d %H:%M:%S {job.id}')] = get_job_list_html(q_name, job)
+        for job in queue.get_jobs():
+            rows[q_name]["enqueued"][job.created_at.strftime(f'%Y-%m-%d %H:%M:%S {job.id}')] = get_job_list_html(q_name, job)
         for id in queue.started_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                html += f'<a href="job/{id}">{id}: {job.is_started}</a><br /><br />'
-        html += f'Total {n} Jobs started </p><hr /><br />'
-
-        html += '<p style="min-height: 100px"><b>Finished Jobs:</b><br /><br />'
-        n = len(queue.finished_job_registry.get_job_ids())
+                rows[q_name]["started"][job.created_at.strftime(f'%Y-%m-%d %H:%M:%S {job.id}')] = get_job_list_html(q_name, job)
         for id in queue.finished_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                html += f'<a href="job/{id}">{id}: {job.is_finished}</a><br /><br />'
-        html += f'Total {n} Jobs finished</p><hr /><br />'
-
-        html += '<p style="min-height: 100px"><b>Canceled Jobs:</b><br /><br />'
-        n = len(queue.canceled_job_registry.get_job_ids())
-        for id in queue.canceled_job_registry.get_job_ids():
-            job = queue.fetch_job(id)
-            if job:
-                html += f'<a href="job/{id}">{id}: {job.is_canceled}</a><br /><br />'
-        html += f'Total {n} Jobs canceled</p><hr /><br />'
-
-        html += '<p style="min-height: 100px"><b>Failed Jobs:</b><br /><br />'
-        n = len(queue.failed_job_registry.get_job_ids())
+                rows[q_name]["finished"][job.created_at.strftime(f'%Y-%m-%d %H:%M:%S {job.id}')] = get_job_list_html(q_name, job)
         for id in queue.failed_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                html += f'<a href="job/{id}">{id}: {job.is_failed}</a><br /><br />'
-        html += f'Total {n} Jobs failed</p><hr /><br />'
-
-        html += '<p style="min-height: 100px"><b>ALL Jobs:</b><br /><br />'
-        job_ids = queue.scheduled_job_registry.get_job_ids() + queue.get_job_ids() + queue.started_job_registry.get_job_ids() + queue.finished_job_registry.get_job_ids() + queue.deferred_job_registry.get_job_ids() + queue.canceled_job_registry.get_job_ids() + queue.failed_job_registry.get_job_ids()
-        n = len(job_ids)
-        html += "<table><tr><th>ID</th><th>Schedule</th><th>Queued</th><th>Started</th><th>Finished</th><th>Canceled</th><th>Deffered</th><th>Failed</th></tr>"
-        for id in job_ids:
+                rows[q_name]["failed"][job.created_at.strftime(f'%Y-%m-%d %H:%M:%S {job.id}')] = get_job_list_html(q_name, job)
+        for id in queue.canceled_job_registry.get_job_ids():
             job = queue.fetch_job(id)
             if job:
-                html += f'<tr><td><a href="job/{id}">{id}</a>:</td><td>{job.is_scheduled}</td><td>{job.is_queued}</td><td>{job.is_started}</td><td>{job.is_finished}</td><td>{job.is_canceled}</td><td>{job.is_deferred}</td><td>{job.is_failed}</td></tr>'
-        html += "</table><br/>"
-        html += f'Total {n} Jobs</p><hr /><br />'
+                rows[q_name]["canceled"][job.created_at.strftime(f'%Y-%m-%d %H:%M:%S {job.id}')] = get_job_list_html(q_name, job)
+    html += "<table cellpadding=10 colspacing=10 border=2><tr>"
+    for q_name in queue_names:
+        html += f"<th>{q_name} Queue</th>"
+    html += "</tr>"
+    for status in status_order:
+        html += "<tr>"
+        for q_name in queue_names:
+            html += f"<td><h3>{status.capitalize()} Registery</h3>"
+            keys = rows[q_name][status].keys()
+            sorted(keys)
+            for key in keys:
+                html += rows[q_name][status][key]
+            html += "</td>"
+        html += "</tr>"
+    html += "</table><br/><br/>"
+    return html
 
+
+@app.route("/job/<queue_name>/<job_id>", methods=['GET'])
+def getJob(queue_name, job_id):
+    queue = Queue(queue_name, connection=redis_connection)
+    job = queue.fetch_job(job_id)
+    if not job or not job.args:
+        return f"<h1>JOB {job_id} NOT FOUND</h1>"
+    repo = get_repo_from_job(job)
+    type = get_ref_type_from_job(job)
+    ref = get_ref_from_job(job)
+    html = f'<h1>JOB ID: {job_id}</h1>'
+    html += f'<h2><b>Repo:</b> <a href="https://git.door43.org/{repo}/src/{type}/{ref}" target="_blank">{repo}</a></h2>'
+    html += f'<h3>{get_ref_type_from_job(job)}: {get_ref_from_job(job)}</h3>'
+    html += f'<p>Status: {job.get_status()}<br/>'
+    if job.enqueued_at:
+        html += f'Enqued at: {job.enqueued_at}{f" ({job.get_position()})" if job.is_queued else ""}<br/>'
+    if job.started_at:
+        html += f'Started: {job.started_at}<br/>'
+    if job.ended_at:
+        html += f'Ended: {job.ended_at} {round((job.ended_at-job.enqueued_at).total_seconds() / 60)}'
+    if job.is_failed:
+        html += f"<div><b>Latest Result</b><p><pre>{job.exc_info}</pre></p></div>"
+    html += f'<div><p><b>Payload:</b>'
+    html += f'<form method="POST" action"../../">'
+    html += f'<textarea cols=200 rows=20>'
+    try:
+        html += json.dumps(job.args[0], indent=2)
+    except:
+        pass
+    html += f'</textarea>'
+    html += f'<input type="submit" value="Queue again" />'
+    html += f'</form></p></div>'
+    html += f'<br/><br/><p><a href="../" style="text-decoration:none"><== Go back to queue lists</a></p><br/><br/>'
+    return html
+
+
+def get_job_list_html(queue_name, job):
+    html = f'<a href="/job/{queue_name}/{job.id}">{job.id[:5]}</a>: {get_dcs_link(job)}<br/>'
+    times = []
+    if job.created_at:
+        times.append(f'created {job.created_at.strftime("%Y-%m-%d %H:%M:%S")}')
+    if job.enqueued_at:
+        times.append(f'enqued {job.enqueued_at.strftime("%Y-%m-%d %H:%M:%S")}')
+    if job.started_at:
+        times.append(f'started {job.started_at.strftime("%Y-%m-%d %H:%M:%S")}')
+    if job.ended_at:
+        times.append(f'ended {job.started_at.strftime("%Y-%m-%d %H:%M:%S")} ({round((job.ended_at-job.enqueued_at).total_seconds() / 60)})')
+    if len(times) > 0:
+        html += '<div style="font-style: italic; color: #929292">'
+        html += ';<br/>'.join(times)
         html += '</div>'
+    return html
 
-    return f"{html}"
+
+def get_repo_from_job(job):
+    if not job or not job.args:
+        return None
+    payload = job.args[0]
+    if "repo_name" in payload and "repo_owner" in payload:
+        return f'{payload["repo_owner"]}/{payload["repo_name"]}'
+    elif "repository" in payload and "full_name" in payload["repository"]:
+        return payload["repository"]["full_name"]
+
+  
+def get_ref_from_job(job):  
+    if not job or not job.args:
+        return None
+    payload = job.args[0]
+    if "repo_ref" in payload and "repo_ref_type" in payload:
+        return payload["repo_ref"]
+    elif "ref" in payload:
+        ref_parts = payload["ref"].split("/")
+        return ref_parts[-1]
 
 
-@app.route('/job/<job_id>')
-def getJob(job_id):
-    djh_queue = Queue("door43-job-handler", connection=r)
-    tjh_queue = Queue("tx-job-handler", connection=r)
-    res = djh_queue.fetch_job(job_id)
-    if res == None:
-        res = tjh_queue.fetch_job(job_id)
-    print(res.args, file=sys.stderr)
-    if not res.result:
-        return f'<center><br /><br /><h3>The job is still pending</h3><br /><br />ID:{job_id}<br />Queued at: {res.enqueued_at}<br />Status: {res._status}</center><b>{res.args[1]}</b>'
-    return f'<center><br /><br /><img src="{res.result}" height="200px"><br /><br />ID:{job_id}<br />Queued at: {res.enqueued_at}<br />Finished at: {res.ended_at}</center><b>{res.args[1]}</b>'
+def get_ref_type_from_job(job):
+    if not job or not job.args:
+        return None
+    payload = job.args[0]
+    if "repo_ref" in payload and "repo_ref_type" in payload:
+        return payload["repo_ref_type"]
+    elif "ref" in payload:
+        ref_parts = payload["ref"].split("/")
+        if ref_parts[1] == "tags":
+            return "tag"
+        else:
+            return "branch"
 
-def queue_new_job(delay, payload, is_user_branch, schedule_seconds):
+
+def get_dcs_link(job):
+    repo = get_repo_from_job(job)
+    ref = get_ref_from_job(job)
+    type = get_ref_type_from_job(job)
+    if not repo or not ref:
+        return 'INVALID'
+    return f'<a href="https://git.door43.org/{repo}/src/{type}/{ref}" target="_blank">{repo} : {ref}</a>'
+
+
+def queue_new_job(payload, is_user_branch, schedule_seconds):
     remove_similar_jobs(payload, ["ref", "repo.full_name"])
     try:
-        print(f"DELAY: {delay}", file=sys.stderr)
         if is_user_branch:
-            job = djh_queue.enqueue_in(datetime.timedelta(seconds=schedule_seconds), "webhook.job", delay, payload)
+            job = djh_queue.enqueue_in(datetime.timedelta(seconds=schedule_seconds), "webhook.job", payload)
         else:
-            job = djh_queue.enqueue("webhook.job", delay, payload)
+            job = djh_queue.enqueue("webhook.job", payload)
+        return job
     except Exception as e:
         print("Failed to queue", file=sys.stderr)
         print(e, file=sys.stderr)
-    return job
+
 
 def remove_similar_jobs(payload, matching_fields):
     for queue in [djh_queue, tjh_queue]:
@@ -145,7 +218,7 @@ def remove_similar_jobs(payload, matching_fields):
             job = queue.fetch_job(job_id)
             if job:
                 print("GOT JOB", file=sys.stderr)
-                old_payload = job.args[1]
+                old_payload = job.args[0]
                 if payload:
                     similar = []
                     for field in matching_fields:
