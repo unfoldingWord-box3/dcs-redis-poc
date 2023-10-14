@@ -40,7 +40,7 @@ def status():
     <br/>
     <input type="checkbox" name="is_user_branch" checked="{is_user_branch}"/> Is user branch, schedule for <input type="text" name="schedule_seconds" value="{schedule_seconds}" /> seconds
     <br/>
-    Payload:<br/><textarea name="payload" rows=5 cols="50">{json.dumps(payload) if payload else ""}</textarea>
+    Payload:<br/><textarea name="payload" rows=5 cols="50">{json.dumps(payload, indent=2) if payload else ""}</textarea>
     <br/>
     <input type="submit" value="Queue Job"/>
 </form>'''
