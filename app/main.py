@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import redis
 from rq import Queue, command, cancel_job
 import sys
@@ -12,44 +12,65 @@ redis_connection = redis.Redis(host='redis', port=6379, db=0)
 djh_queue = Queue('door43_job_handler', connection=redis_connection)
 tjh_queue = Queue('tx_job_handler', connection=redis_connection)
 
-@app.route('/', methods = ['POST', 'GET'])
-def status():
-    print(djh_queue, tjh_queue, file=sys.stderr)
+@app.route('/', methods=['POST'])
+def job_receiver():
+    if not request.data:
+        print("Received request but no payload found", file=sys.stderr)
+        return jsonify({'error': 'No payload found. You must submit a POST request via a DCS webhook notification.'}), 400
 
+    # Bail if this is not from DCS
+    if 'X-Gitea-Event' not in request.headers:
+        print(f"No 'X-Gitea-Event' in {request.headers}", file=sys.stderr)
+        return jsonify({'error': 'This does not appear to be from DCS.'}), 400
+
+    event_type = request.headers['X-Gitea-Event']
+    print(f"Got a '{event_type}' event from DCS", file=sys.stderr)
+
+    # Get the json payload and check it
+    payload = request.get_json()
+    job = queue_new_job(payload)
+    if job:
+        return_dict = {'success': True,
+                       'job_id': job.id,
+                        'status': 'queued',
+                        'queue_name': "door43_job_handler",
+                       'door43_job_queued_at': datetime.datetime.utcnow()}
+        return jsonify(return_dict)
+    else:
+        return jsonify({'error': 'Failed to queue job. See logs'}), 400    
+
+
+@app.route('/', methods = ['GET'])
+def status():
     f = open('./payload.json')
-    default_payload = f.read()
+    payload = f.read()
     f.close()
 
-    delayStr = request.form.get('delay', 10)
-    is_user_branch = request.form.get('is_user_branch', False)
-    scheduleSecondsStr = request.form.get('schedule_seconds', 10)
-    payload = json.loads(request.form.get('payload', default_payload))
-
-    try:
-        delay = int(delayStr)
-    except:
-        delay = 10
-
-    try:
-        schedule_seconds = int(scheduleSecondsStr)
-    except:
-        schedule_seconds = 10
-
     html = f'''
-<form method="POST">Time Working: <input type="text" name="delay" value="{delayStr}" />
+<form>
+    Payload:<br/><textarea id="payload" rows="5" cols="50">{payload}</textarea>
     <br/>
-    <input type="checkbox" name="is_user_branch" checked="{is_user_branch}"/> Is user branch, schedule for <input type="text" name="schedule_seconds" value="{schedule_seconds}" /> seconds
-    <br/>
-    Payload:<br/><textarea name="payload" rows=5 cols="50">{json.dumps(payload, indent=2) if payload else ""}</textarea>
-    <br/>
-    <input type="submit" value="Queue Job"/>
-</form>'''
-
-    if request.method == 'POST':
-        payload['delay'] = delay
-        job = queue_new_job(payload, is_user_branch, schedule_seconds)
-        if job:
-            html += f"<p><b>Status:</b> {'Scheduled' if is_user_branch else 'Queued'} new job: {job.id}</p>" 
+    <input type="button" value="Queue Job" onClick="submitForm()"/>
+</form>
+'''
+    html += '''<script type="text/javascript">
+    function submitForm() {
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/", true);
+        xhr.setRequestHeader('Content-Type', 'application/json; charset=UTF-8');
+        xhr.setRequestHeader('X-Gitea-Event', 'push');
+        xhr.setRequestHeader('X-Gitea-Event-Type', 'push')
+        var input = document.getElementById("payload");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === 4) {
+                alert(xhr.response);
+                console.log(xhr.response);
+            }
+        };
+        console.log(xhr.send(payload.value));
+    }
+</script>
+'''
 
     queue_names = ["door43_job_handler", "tx_job_handler"]
     status_order = ["scheduled", "enqueued", "started", "finished", "failed", 'canceled']
@@ -81,7 +102,7 @@ def status():
             job = queue.fetch_job(id)
             if job:
                 rows[q_name]["canceled"][job.created_at.strftime(f'%Y-%m-%d %H:%M:%S {job.id}')] = get_job_list_html(q_name, job)
-    html += '<table cellpadding=10 colspacing=10 border=2><tr>'
+    html += '<table cellpadding="10" colspacing="10" border="2"><tr>'
     for q_name in queue_names:
         html += f'<th>{q_name} Queue</th>'
     html += '</tr>'
@@ -122,14 +143,28 @@ def getJob(queue_name, job_id):
     if job.is_failed:
         html += f"<div><b>Latest Result</b><p><pre>{job.exc_info}</pre></p></div>"
     html += f'<div><p><b>Payload:</b>'
-    html += f'<form method="POST" action"../../">'
-    html += f'<textarea cols=200 rows=20>'
+    html += f'<form>'
+    html += f'<textarea id="payload" cols="200" rows="20" id="payload">'
     try:
         html += json.dumps(job.args[0], indent=2)
     except:
         pass
     html += f'</textarea>'
-    html += f'<br/><br/><input type="submit" value="Queue again" />'
+    if queue_name == "door43_job_handler":
+        html += "<br/><br/>"
+        html += '''<input type="button" value="Re-Queue Job" onClick="submitForm()"/>
+<script type="text/javascript">
+    function submitForm() {
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "../..", true);
+        xhr.setRequestHeader('Content-Type', 'application/json; charset=UTF-8');
+        xhr.setRequestHeader('X-Gitea-Event', 'push');
+        xhr.setRequestHeader('X-Gitea-Event-Type', 'push')
+        var input = document.getElementById("payload");
+        xhr.send(payload.value);
+    }
+</script>
+'''
     html += f'</form></p></div>'
     return html
 
@@ -196,11 +231,14 @@ def get_dcs_link(job):
     return f'<a href="https://git.door43.org/{repo}/src/{type}/{ref}" target="_blank">{repo.split("/")[-1]}=>{ref}</a>'
 
 
-def queue_new_job(payload, is_user_branch, schedule_seconds):
+def queue_new_job(payload):
     remove_similar_jobs(payload, ["ref", "repo.full_name"])
+    if not payload or "ref" not in payload or "repository" not in payload:
+        return None
+
     try:
-        if is_user_branch:
-            job = djh_queue.enqueue_in(datetime.timedelta(seconds=schedule_seconds), "webhook.job", payload, result_ttl=(60*60*24))
+        if 'ref' in payload and "refs/tags" not in payload['ref'] and "master" not in payload['ref']:
+            job = djh_queue.enqueue_in(datetime.timedelta(seconds=10), "webhook.job", payload, result_ttl=(60*60*24))
         else:
             job = djh_queue.enqueue("webhook.job", payload, result_ttl=(60*60*24))
         return job

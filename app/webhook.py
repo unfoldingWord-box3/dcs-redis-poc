@@ -13,19 +13,14 @@ tjh_queue = Queue('tx_job_handler', connection=redis_connection)
 
 def job(payload):
     myJob = get_current_job(redis_connection)
-    delay = payload['delay'] if 'delay' in payload else 10
-    print(f"JOB: GOT THIS JOBID: {myJob.id}\nDELAY: {delay}\n", file=sys.stderr)
-    converter = Converter(myJob.id, delay)
+    converter = Converter(myJob.id, 10)
     url = converter.run()
     tjh_queue.enqueue("webhook.job2", payload, job_id="job2_"+myJob.id)
     return url
 
 def job2(payload):
     myJob = get_current_job(redis_connection)
-    print("JOB ID IN JOB2: "+myJob.id, file=sys.stderr)
-    delay = payload['delay'] if 'delay' in payload else 10
-    print(f"JOB2: GOT THIS JOBID: {myJob.id}\nDELAY: {delay}\n", file=sys.stderr)
-    converter = Converter(myJob.id, delay)
+    converter = Converter(myJob.id, 10)
     return converter.run()
 
 class Converter():

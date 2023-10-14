@@ -9,7 +9,7 @@ r = redis.Redis(port=6379, db=0)
 # djh_queue = Queue('door43-job-handler', connection=r)
 # tjh_queue = Queue('tx-job-handler', connection=r)
 
-def run():
+def list():
     # f = open('./payload.json')
     # default_payload = f.read()
     # f.close()
@@ -139,4 +139,4 @@ def remove_similar_jobs(payload, matching_fields):
 
 
 if __name__ == "__main__":
-    run()
+    list()
