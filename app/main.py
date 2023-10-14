@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import redis
 from rq import Queue, command, cancel_job
 import sys
-import datetime
+from datetime import datetime, timedelta
 import json
 from functools import reduce
 
@@ -34,7 +34,7 @@ def job_receiver():
                        'job_id': job.id,
                         'status': 'queued',
                         'queue_name': "door43_job_handler",
-                       'door43_job_queued_at': datetime.datetime.utcnow()}
+                       'door43_job_queued_at': datetime.utcnow()}
         return jsonify(return_dict)
     else:
         return jsonify({'error': 'Failed to queue job. See logs'}), 400    
@@ -170,7 +170,7 @@ def getJob(queue_name, job_id):
 
 def get_relative_time(start=None, end=None):
     if not end:
-        end = datetime.datetime.utcnow()
+        end = datetime.utcnow()
     if not start:
         start = end
     print(start, file=sys.stderr)
@@ -192,7 +192,7 @@ def get_relative_time(start=None, end=None):
 
 def get_job_list_html(queue_name, job):
     orig_job_id = job.id.split('_')[-1]
-    html = f'<a href="/job/{queue_name}/{job.id}">{orig_job_id[:5]}</a>: {get_dcs_link(job)}<br/>'
+    html = f'<a href="job/{queue_name}/{job.id}">{orig_job_id[:5]}</a>: {get_dcs_link(job)}<br/>'
     if job.ended_at:
         timeago = f'{get_relative_time(job.ended_at)} ago'
         runtime = get_relative_time(job.started_at, job.ended_at)
@@ -264,7 +264,7 @@ def queue_new_job(payload):
 
     try:
         if 'ref' in payload and "refs/tags" not in payload['ref'] and "master" not in payload['ref']:
-            job = djh_queue.enqueue_in(datetime.timedelta(seconds=10), "webhook.job", payload, result_ttl=(60*60*24))
+            job = djh_queue.enqueue_in(timedelta(seconds=10), "webhook.job", payload, result_ttl=(60*60*24))
         else:
             job = djh_queue.enqueue("webhook.job", payload, result_ttl=(60*60*24))
         return job
