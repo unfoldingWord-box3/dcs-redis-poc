@@ -15,7 +15,7 @@ def job(payload):
     myJob = get_current_job(redis_connection)
     converter = Converter(myJob.id, 10)
     url = converter.run()
-    tjh_queue.enqueue("webhook.job2", payload, job_id="job2_"+myJob.id)
+    tjh_queue.enqueue("webhook.job2", payload, job_id="tx_job_handler_"+myJob.id)
     return url
 
 def job2(payload):
@@ -31,5 +31,5 @@ class Converter():
     def run(self):
         time.sleep(self.delay)
         url = requests.get(
-            "https://api.thecatapi.com/v1/images/search").json()[0]['url']
+            "https://api.thecatapi.com/vv1/images/search").json()[0]['url']
         return url
