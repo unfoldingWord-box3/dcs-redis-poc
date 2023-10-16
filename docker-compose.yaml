@@ -40,3 +40,36 @@ services:
         command: rq worker --url redis://redis:6379 --with-scheduler tx_job_handler
         links:
             - redis
+
+    worker3:
+        image: app-image:latest
+        volumes:
+            - ./app:/app
+        depends_on:
+            - redis
+            - flask-app
+        command: rq worker --url redis://redis:6379 --with-scheduler tx_job_handler_priority
+        links:
+            - redis
+
+    worker4:
+        image: app-image:latest
+        volumes:
+            - ./app:/app
+        depends_on:
+            - redis
+            - flask-app
+        command: rq worker --url redis://redis:6379 --with-scheduler tx_job_handler_pdf
+        links:
+            - redis
+
+    worker5:
+        image: app-image:latest
+        volumes:
+            - ./app:/app
+        depends_on:
+            - redis
+            - flask-app
+        command: rq worker --url redis://redis:6379 --with-scheduler door43_job_handler_callback
+        links:
+            - redis
