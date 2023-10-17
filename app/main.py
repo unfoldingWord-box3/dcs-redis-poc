@@ -227,7 +227,8 @@ def getJob(job_id):
         queue = Queue(PREFIX+q_name, connection=redis_connection)
         prefix = f'{q_name}_' if q_name != DOOR43_JOB_HANDLER_QUEUE_NAME else ""
         job = queue.fetch_job(prefix+job_id)
-        break
+        if job:
+            break
     if not job or not job.args:
         return f"<h1>JOB NOT FOUND: {job_id}</h1>"
 
