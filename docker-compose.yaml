@@ -8,7 +8,7 @@ services:
             - ./redis:/redis
 
     flask-app:
-        image: app-image
+        image: tx-worker:latest
         container_name: flask-app
         build: 
             context: app
@@ -20,7 +20,8 @@ services:
             - ./app:/app
 
     worker1:
-        image: app-image:latest
+        image: tx-worker:latest
+        container_name: worker1
         volumes:
             - ./app:/app
         depends_on:
@@ -31,7 +32,8 @@ services:
             - redis
 
     worker2:
-        image: app-image:latest
+        image: tx-worker:latest
+        container_name: worker2
         volumes:
             - ./app:/app
         depends_on:
@@ -42,7 +44,8 @@ services:
             - redis
 
     worker3:
-        image: app-image:latest
+        image: tx-worker:latest
+        container_name: worker3
         volumes:
             - ./app:/app
         depends_on:
@@ -53,7 +56,8 @@ services:
             - redis
 
     worker4:
-        image: app-image:latest
+        image: tx-worker:latest
+        container_name: worker4
         volumes:
             - ./app:/app
         depends_on:
@@ -64,7 +68,7 @@ services:
             - redis
 
     worker5:
-        image: app-image:latest
+        image: tx-worker:latest
         volumes:
             - ./app:/app
         depends_on:
