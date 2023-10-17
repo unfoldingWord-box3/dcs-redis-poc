@@ -20,7 +20,7 @@ def job(payload):
     converter = Converter(myJob.id, 10)
     url = converter.run()
     if "ref" in payload and ("master" in payload["ref"] or "tags" in payload["ref"]):
-        priority_queue.enqueue("webhook.job2", payload, job_id="tx_job_handler_"+myJob.id, result_ttl=(60*60*24))
+        priority_queue.enqueue("webhook.job2", payload, job_id="tx_job_handler_priority_"+myJob.id, result_ttl=(60*60*24))
     elif "DCS_event" in payload and "pdf" in payload["DCS_event"]:
         pdf_queue.enqueue("webhook.job2", payload, job_id="tx_job_handler_pdf_"+myJob.id, result_ttl=(60*60*24))
     else:
