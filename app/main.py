@@ -83,7 +83,7 @@ def getStatusTable():
     repo_filter = request.args.get("repo")
     ref_filter = request.args.get("ref")
     event_filter = request.args.get("event")
-    show_canceled = job_id_filter=request.args.get("show_canceled",  default=False, type=bool)
+    show_canceled = request.args.get("show_canceled",  default=False, type=bool)
 
     if len(request.args) > (1 if show_canceled else 0):
         html += f'<p>Table is filtered. <a href="?{"show_canceled=true" if show_canceled else ""}">Click to Show All Jobs</a></p>'
@@ -97,7 +97,7 @@ def getStatusTable():
         html += f'<input type="hidden" name="event" value="{event_filter}"/>'
     html += f'<input type="checkbox" name="show_canceled" value="true" onChange="this.form.submit()"  {"checked" if show_canceled else ""}/> Show canceled</form>'
 
-    job_map = get_job_map(repo_filter=repo_filter, ref_filter=ref_filter, event_filter=event_filter, show_canceled=show_canceled)
+    job_map = get_job_map(job_id_filter=job_id_filter, repo_filter=repo_filter, ref_filter=ref_filter, event_filter=event_filter, show_canceled=show_canceled)
 
     html += '<table cellpadding="10" colspacing="10" border="2"><tr>'
     for i, q_name in enumerate(queue_names):
@@ -160,18 +160,24 @@ def get_job_map(job_id_filter=None, repo_filter=None, ref_filter=None, event_fil
         for registry_name in registry_names:
             job_map[queue_name][registry_name] = {}
         for id in queue.scheduled_job_registry.get_job_ids():
-            add_to_job_map(queue_name, "scheduled", queue.fetch_job(id))
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+                add_to_job_map(queue_name, "scheduled", queue.fetch_job(id))
         for job in queue.get_jobs():
-            add_to_job_map(queue_name, "enqueued", job)
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+                add_to_job_map(queue_name, "enqueued", job)
         for id in queue.started_job_registry.get_job_ids():
-            add_to_job_map(queue_name, "started", queue.fetch_job(id))
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+               add_to_job_map(queue_name, "started", queue.fetch_job(id))
         for id in queue.finished_job_registry.get_job_ids():
-            add_to_job_map(queue_name, "finished", queue.fetch_job(id))
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+                add_to_job_map(queue_name, "finished", queue.fetch_job(id))
         for id in queue.failed_job_registry.get_job_ids():
-            add_to_job_map(queue_name, "failed", queue.fetch_job(id))
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+                add_to_job_map(queue_name, "failed", queue.fetch_job(id))
         if show_canceled:
-            for id in queue.canceled_job_registry.get_job_ids():
-                add_to_job_map(queue_name, "canceled", queue.fetch_job(id))
+            if not job_id_filter or job_id_filter == id:
+                for id in queue.canceled_job_registry.get_job_ids():
+                    add_to_job_map(queue_name, "canceled", queue.fetch_job(id))
     return job_map
 
 
@@ -182,9 +188,11 @@ def getJob(job_id):
 
     job = None
     for q_name in queue_names:
-        queue = Queue(PREFIX+queue_name, connection=redis_connection)
+        logger.error(q_name)
+        queue = Queue(PREFIX+q_name, connection=redis_connection)
         prefix = f'{q_name}_' if q_name != DOOR43_JOB_HANDLER_QUEUE_NAME else ""
-        job = queue.get_job(prefix+job_id)
+        job = queue.fetch_job(prefix+job_id)
+        break
     if not job or not job.args:
         return f"<h1>JOB NOT FOUND: {job_id}</h1>"
 
@@ -214,7 +222,7 @@ def getJob(job_id):
     ref = get_ref_from_payload(job.args[0])
     event = get_event_from_payload(job.args[0])
 
-    html += f'<h1>JOB ID: <a href="../?job_id={job_id}">{job_id}<a></h1>'
+    html += f'<h1>JOB ID: {job_id}</h1>'
     html += "<p>"
     html += f'<b>Repo:</b> <a href="https://git.door43.org/{repo}/src/{ref_type}/{ref}" target="_blank">{repo}</a><br/>'
     html += f'<b>{ref_type.capitalize()}:</b> {ref}<br/>'
@@ -355,7 +363,6 @@ def get_relative_time(start=None, end=None):
     if not start:
         start = end
     ago = round((end - start).total_seconds())
-    print(f"ago: {ago}", file=sys.stderr)
     t = "s"
     if ago > 120:
         ago = round(ago / 60)
@@ -409,6 +416,10 @@ def get_ref_from_payload(payload):
     elif "ref" in payload:
         ref_parts = payload["ref"].split("/")
         return ref_parts[-1]
+    elif "release" in payload and "tag_name" in payload["release"]:
+        return payload["release"]["tag_name"]
+    elif "DCS_event" in payload and payload["DCS_event"] == "fork":
+        return "master"
 
 
 def get_ref_type_from_payload(payload):
@@ -422,6 +433,11 @@ def get_ref_type_from_payload(payload):
             return "tag"
         elif ref_parts[1] == "heads":
             return "branch"
+    elif "DCS_event" in payload:
+        if payload["DCS_event"] == "fork":
+            return "branch"
+        elif payload["DCS_event"] == "release":
+            return "tag"
 
 
 def get_event_from_payload(payload):
