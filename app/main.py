@@ -593,5 +593,10 @@ def job_receiver():
         return jsonify({'error': 'Failed to queue job. See logs'}), 400    
 
 
+@app.route('/'+WEBHOOK_URL_SEGMENT, methods=['GET'])
+def homepage():
+    return 'Go to the  <a href="status/">status page</a>'
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", debug=True)
