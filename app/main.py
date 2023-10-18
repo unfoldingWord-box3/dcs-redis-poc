@@ -35,15 +35,13 @@ app = Flask(__name__)
 #   ref = db.Column('ref', db.String(50))
 #   event = db.Column('event', db.String(50))
 #   job_id = db.Column('job_id', db.String(50))
-#   show_canceled = db.Column('show_canceled', db.Boolean)
 
-#   def __init__(self, repo, ref, event, job_id, show_canceled):
+#   def __init__(self, repo, ref, event, job_id):
 #     self.timestamp = datetime.now()
 #     self.repo = repo
 #     self.ref = ref
 #     self.event = event
 #     self.job_id = job_id
-#     self.show_canceled = show_canceled
 
 
 @app.route('/'+WEBHOOK_URL_SEGMENT, methods=['POST'])
@@ -143,11 +141,10 @@ def get_status_table():
     ref_filter = status_data['ref']
     event_filter = status_data['event']
     job_id_filter = status_data['job_id']
-    show_canceled = status_data['show_canceled']  
 
     logger.error(status_data)      
 
-    # db.session.add(StoreSearchData(repo, ref, event, job_id, show_canceled))
+    # db.session.add(StoreSearchData(repo, ref, event, job_id))
     # db.session.commit()
     # numJobs = db.session.query(StoreSearchData).count()
 
@@ -158,8 +155,6 @@ def get_status_table():
             "color": reg_colors[r_name],
             "rows": [],
         }   
-        if r_name == "canceled" and not show_canceled:
-            continue
         r_data = {}
         job_created = {}
         for q_name in queue_names:
