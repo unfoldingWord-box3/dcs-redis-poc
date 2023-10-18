@@ -48,7 +48,7 @@ class Converter():
         self.job_id = job_id
         self.delay = delay
 
-    def run(self):
+    def run(self, extra=""):
         time.sleep(self.delay)
-        url = requests.get("https://api.thecatapi.com/v1/images/search").json()[0]['url']
+        url = requests.get(f"https://api.thecatapi.com/v1/images/search{extra}").json()[0]['url']
         return url

@@ -1,20 +1,16 @@
-from flask import Flask, request, jsonify
+import os
 import redis
-from rq import Queue, command, cancel_job
-from rq.registry import FailedJobRegistry
-import sys
-from datetime import datetime, timedelta
-import json
-from functools import reduce
 import logging
-
-app = Flask(__name__)
-
-redis_connection = redis.Redis(host='redis', port=6379, db=0)
+import json
+from flask import Flask, render_template, url_for, request, jsonify, session
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+from rq import Queue
+from rq.registry import FailedJobRegistry
+from datetime import datetime, timedelta
 
 PREFIX = ""
 WEBHOOK_URL_SEGMENT = ""
-
 LOGGING_NAME = 'door43_enqueue_job' # Used for logging
 DOOR43_JOB_HANDLER_QUEUE_NAME = 'door43_job_handler' # The main queue name for generating HTML, PDF, etc. files (and graphite name) -- MUST match setup.py in door43-job-handler. Will get prefixed for dev
 DOOR43_JOB_HANDLER_CALLBACK_QUEUE_NAME = 'door43_job_handler_callback'
@@ -22,10 +18,83 @@ PREFIXED_LOGGING_NAME = PREFIX + LOGGING_NAME
 
 
 logger = logging.getLogger(PREFIXED_LOGGING_NAME)
+basedir = os.path.abspath(os.path.dirname(__file__))
+logger.error(basedir)
+redis_connection = redis.Redis(host='redis', port=6379, db=0)
 
-######
-###### COPY FROM HERE TO DO NOT COPY
-######
+app = Flask(__name__)
+
+# app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'status_data.db')
+# app.config['SQLALCHEMY_COMMIT_ON_TEARDOWN'] = True
+# db = SQLAlchemy(app)
+# class StoreSearchData(db.Model):
+#   __tablename__ = 'status_data'
+#   id = db.Column('id', db.Integer, primary_key = True)
+#   timestamp = db.Column('timestamp', db.DateTime)
+#   repo = db.Column('repo', db.String(50))
+#   ref = db.Column('ref', db.String(50))
+#   event = db.Column('event', db.String(50))
+#   job_id = db.Column('job_id', db.String(50))
+#   show_canceled = db.Column('show_canceled', db.Boolean)
+
+#   def __init__(self, repo, ref, event, job_id, show_canceled):
+#     self.timestamp = datetime.now()
+#     self.repo = repo
+#     self.ref = ref
+#     self.event = event
+#     self.job_id = job_id
+#     self.show_canceled = show_canceled
+
+
+@app.route('/'+WEBHOOK_URL_SEGMENT, methods=['POST'])
+def job_receiver():
+    if not request.data:
+        logger.error("Received request but no payload found")
+        return jsonify({'error': 'No payload found. You must submit a POST request via a DCS webhook notification.'}), 400
+
+    # Bail if this is not from DCS
+    if 'X-Gitea-Event' not in request.headers:
+        logger.error(f"No 'X-Gitea-Event' in {request.headers}")
+        return jsonify({'error': 'This does not appear to be from DCS.'}), 400
+
+    event_type = request.headers['X-Gitea-Event']
+    logger.error(f"Got a '{event_type}' event from DCS")
+
+    # Get the json payload and check it
+    payload = request.get_json()
+    payload["DCS_event"] = event_type
+    job = queue_new_job(payload)
+    if job:
+        return_dict = {'success': True,
+                       'job_id': job.id,
+                        'status': 'queued',
+                        'queue_name': "door43_job_handler",
+                       'door43_job_queued_at': datetime.utcnow()}
+        return jsonify(return_dict)
+    else:
+        return jsonify({'error': 'Failed to queue job. See logs'}), 400    
+
+
+def queue_new_job(response_dict):
+    if not response_dict or "ref" not in response_dict or "repository" not in response_dict:
+        return None
+
+    cancel_similar_jobs(response_dict)
+
+    try:
+        queue = Queue("door43_job_handler", connection=redis_connection)
+        if 'ref' in response_dict and "refs/tags" not in response_dict['ref'] and "master" not in response_dict['ref'] and response_dict["DCS_event"] == "push":
+            job = queue.enqueue_in(timedelta(seconds=10), "webhook.job", response_dict, result_ttl=(60*60*24))
+        else:
+            job = queue.enqueue("webhook.job", response_dict, result_ttl=(60*60*24))
+        return job
+    except Exception as e:
+        logger.error("Failed to queue")
+        logger.error(e)
+        logger.error("HI")
+
+
+#### COPY THIS AND BELOW!!!!! #####
 
 queue_names = ["door43_job_handler", "tx_job_handler", "tx_job_handler_priority", "tx_job_handler_pdf", "door43_job_handler_callback"]
 queue_desc = {
@@ -36,184 +105,130 @@ queue_desc = {
     DOOR43_JOB_HANDLER_CALLBACK_QUEUE_NAME: "Fetches coverted files from cloud, deploys to Door43 Preview (door43.org) for HTML and PDF jobs",
 }
 registry_names = ["scheduled", "enqueued", "started", "finished", "failed", 'canceled']
-
-@app.route('/' + WEBHOOK_URL_SEGMENT + 'sbmit/', methods = ['GET'])
-def getSubmitForm():
-    f = open('./payload.json')
-    payload = f.read()
-    f.close()
-
-    html += f'''
-<form>
-    <b>Payload:</b><br/><textarea id="payload" rows="5" cols="50">{payload}</textarea>
-    <br/>
-    <b>DCS_event:</b> <input type="text" id="DCS_event" value="push" />
-    <br/>
-    <input type="button" value="Queue Job" onClick="submitForm()"/>
-</form>
-'''
-    html += '''<script type="text/javascript">
-    function submitForm() {
-        var payload = document.getElementById("payload");
-        var dcs_event = document.getElementById("DCS_event");
-        var xhr = new XMLHttpRequest();
-        xhr.open("POST", "/", true);
-        xhr.setRequestHeader('Content-Type', 'application/json; charset=UTF-8');
-        xhr.setRequestHeader('X-Gitea-Event', dcs_event.value);
-        xhr.setRequestHeader('X-Gitea-Event-Type', dcs_event.value)
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4) {
-                alert(xhr.response);
-                console.log(xhr.response);
-            }
-        };
-        console.log(payload.value);
-        console.log(event.value);
-        xhr.send(payload.value);
-    }
-</script>
-'''
-    return html
+reg_colors = {
+    "scheduled": "primary",
+    "enqueued": "secondary",
+    "started": "success",
+    "finished": "info",
+    "failed": "danger",
+    "canceled": "light"
+}
+basedir = os.path.abspath(os.path.dirname(__file__))
 
 
-@app.route('/' + WEBHOOK_URL_SEGMENT + "status/", methods = ['GET'])
-def getStatusTable():
-    html = ""
-    job_id_filter = request.args.get("job_id")
-    repo_filter = request.args.get("repo")
-    ref_filter = request.args.get("ref")
-    event_filter = request.args.get("event")
-    show_canceled = request.args.get("show_canceled",  default=False, type=bool)
+@app.route('/'+WEBHOOK_URL_SEGMENT, methods = ['GET'])
+def homepage():
+    return 'Go to the  <a href="status/">status page</a>'
 
-    f = open('./payload.json')
-    payload = f.read()
-    f.close()
 
-    html += f'''
-<form>
-    <b>Payload:</b><br/><textarea id="payload" rows="5" cols="50">{payload}</textarea>
-    <br/>
-    <b>DCS_event:</b> <input type="text" id="DCS_event" value="push" />
-    <br/>
-    <input type="button" value="Queue Job" onClick="submitForm()"/>
-</form>
-'''
-    html += '''<script type="text/javascript">
-    function submitForm() {
-        var payload = document.getElementById("payload");
-        var dcs_event = document.getElementById("DCS_event");
-        var xhr = new XMLHttpRequest();
-        xhr.open("POST", "/", true);
-        xhr.setRequestHeader('Content-Type', 'application/json; charset=UTF-8');
-        xhr.setRequestHeader('X-Gitea-Event', dcs_event.value);
-        xhr.setRequestHeader('X-Gitea-Event-Type', dcs_event.value)
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4) {
-                alert(xhr.response);
-                console.log(xhr.response);
-            }
-        };
-        console.log(payload.value);
-        console.log(event.value);
-        xhr.send(payload.value);
-    }
-</script>
-'''
+@app.route('/' + WEBHOOK_URL_SEGMENT + 'status/', methods = ['GET'])
+def status_page():
+#   if not os.path.exists(os.path.join(basedir, 'status_data.db')):
+#     db.create_all()
+  f = open(os.path.join(basedir, 'payload.json'))
+  payload = f.read()
+  f.close()
+  
+  repo = request.args.get("repo", "")
+  ref = request.args.get("ref", "")
+  event = request.args.get("event", "")
+  job_id = request.args.get("job_id", "")
+  return render_template('index.html', payload=payload, repo=repo, ref=ref, event=event, job_id=job_id)
 
-    if len(request.args) > (1 if show_canceled else 0):
-        html += f'<p>Table is filtered. <a href="?{"show_canceled=true" if show_canceled else ""}">Click to Show All Jobs</a></p>'
 
-    html += f'<form METHOD="GET">'
-    if repo_filter:
-        html += f'<input type="hidden" name="repo" value="{repo_filter}"/>'
-    if ref_filter:
-        html += f'<input type="hidden" name="ref" value="{ref_filter}"/>'
-    if event_filter:
-        html += f'<input type="hidden" name="event" value="{event_filter}"/>'
-    html += f'<input type="checkbox" name="show_canceled" value="true" onChange="this.form.submit()"  {"checked" if show_canceled else ""}/> Show canceled</form>'
+@app.route('/get_status_table', methods=['POST'])
+def get_status_table():
+    status_data = request.get_json()
+    repo_filter = status_data['repo']
+    ref_filter = status_data['ref']
+    event_filter = status_data['event']
+    job_id_filter = status_data['job_id']
+    show_canceled = status_data['show_canceled']  
 
-    job_map = get_job_map(job_id_filter=job_id_filter, repo_filter=repo_filter, ref_filter=ref_filter, event_filter=event_filter, show_canceled=show_canceled)
+    logger.error(status_data)      
 
-    html += '<table cellpadding="10" colspacing="10" border="2"><tr>'
+    # db.session.add(StoreSearchData(repo, ref, event, job_id, show_canceled))
+    # db.session.commit()
+    # numJobs = db.session.query(StoreSearchData).count()
+
+    # job_map = get_job_map(job_id_filter=job_id, repo_filter=repo, ref_filter=ref, event_filter=event, show_canceled=show_canceled)
+
+    html = '<table class="table"><tr class="table-dark"><th scope="col" style="vertical-align:top">Queue:</th>'
     for i, q_name in enumerate(queue_names):
-        html += f'<th style="vertical-align:top">{q_name}{"&rArr;tx" if i==0 else "&rArr;callback" if i<(len(queue_names)-1) else ""}</th>'
-    html += '</tr><tr>'
+        html += f'<th scope="col" style="vertical-align:top">{q_name}{"&rArr;tx" if i==0 else "&rArr;callback" if i<(len(queue_names)-1) else ""}</th>'
+    html += '</tr><tr class="table-secondary"><th scope="col" style="vertical-align:bottom">Status&#8628;</th>'
     for q_name in queue_names:
         html += f'<td style="font-style: italic;font-size:0.8em;vertical-align:top">{queue_desc[q_name]}</td>'
-    html += '</tr>'
+    html += '</tr></thead>'
     for r_name in registry_names:
         if r_name == "canceled" and not show_canceled:
             continue
-        html += '<tr>'
+        r_data = {}
+        job_created = {}
         for q_name in queue_names:
-            html += f'<td style="vertical-align:top"><h3>{r_name.capitalize()} Registery</h3>'
-            sorted_ids = sorted(job_map[q_name][r_name].keys(), key=lambda id: job_map[q_name][r_name][id]["job"].created_at, reverse=True)
-            for id in sorted_ids:
-                html += get_job_list_html(job_map[q_name][r_name][id]["job"])
-            html += '</td>'
-        html += '</tr>'
-    html += '</table><br/><br/>'
-    return html
-
-def get_job_map(job_id_filter=None, repo_filter=None, ref_filter=None, event_filter=None, show_canceled=False):
-    job_map = {}
-
-    def add_to_job_map(queue_name, registry_name, job):
-        if not job or not job.args:
-            return
-        repo = get_repo_from_payload(job.args[0])
-        ref = get_ref_from_payload(job.args[0])
-        event = get_event_from_payload(job.args[0])
-        job_id = job.id.split('_')[-1]
-
-        if (job_id_filter and job_id_filter != job_id) \
-            or (repo_filter and repo_filter != repo) \
-            or (ref_filter and ref_filter != ref) \
-            or (event_filter and event_filter != event):
-            return
-
-        canceled = job.args[0]["canceled"] if "canceled" in job.args[0] else []
-        if job_id not in job_map[queue_name][registry_name]:
-            job_map[queue_name][registry_name][job_id] = {}
-        job_map[queue_name][registry_name][job_id]["job"] = job
-        job_map[queue_name][registry_name][job_id]["canceled"] = canceled
-
-        for qn in job_map:
-            for rn in job_map[qn]:
-                for id in job_map[qn][rn]:
-                    j = job_map[qn][rn][id]["job"]
-                    c = job_map[qn][rn][id]["canceled"] if "canceled" in job_map[qn][rn][id]["job"].args[0] else []
-                    if id != job_id and (job.is_canceled or j.is_canceled):
-                        if id in canceled:
-                            job_map[qn][rn][id]["canceled_by"] = job_id
-                        elif job_id in c:
-                            job_map[queue_name][registry_name][job_id]["canceled_by"] = id
-
-    for queue_name in queue_names:
-        queue = Queue(PREFIX + queue_name, connection=redis_connection)
-        job_map[queue_name] = {}
-        for registry_name in registry_names:
-            job_map[queue_name][registry_name] = {}
-        for id in queue.scheduled_job_registry.get_job_ids():
-            if not job_id_filter or job_id_filter == id.split('_')[-1]:
-                add_to_job_map(queue_name, "scheduled", queue.fetch_job(id))
-        for job in queue.get_jobs():
-            if not job_id_filter or job_id_filter == id.split('_')[-1]:
-                add_to_job_map(queue_name, "enqueued", job)
-        for id in queue.started_job_registry.get_job_ids():
-            if not job_id_filter or job_id_filter == id.split('_')[-1]:
-               add_to_job_map(queue_name, "started", queue.fetch_job(id))
-        for id in queue.finished_job_registry.get_job_ids():
-            if not job_id_filter or job_id_filter == id.split('_')[-1]:
-                add_to_job_map(queue_name, "finished", queue.fetch_job(id))
-        for id in queue.failed_job_registry.get_job_ids():
-            if not job_id_filter or job_id_filter == id.split('_')[-1]:
-                add_to_job_map(queue_name, "failed", queue.fetch_job(id))
-        if show_canceled:
-            if not job_id_filter or job_id_filter == id:
-                for id in queue.canceled_job_registry.get_job_ids():
-                    add_to_job_map(queue_name, "canceled", queue.fetch_job(id))
-    return job_map
+            r_data[q_name] = {}
+            queue = Queue(PREFIX+q_name, connection=redis_connection)
+            if r_name == "scheduled":
+                job_ids = queue.scheduled_job_registry.get_job_ids()
+            if r_name == "enqueued":
+                job_ids = queue.get_job_ids()
+            if r_name == "started":
+                job_ids = queue.started_job_registry.get_job_ids()
+            if r_name == "finished":
+                job_ids = queue.finished_job_registry.get_job_ids()
+            if r_name == "failed":
+                job_ids = queue.failed_job_registry.get_job_ids()
+            if r_name == "canceled":
+                job_ids == queue.canceled_job_registry.get_job_ids()
+            for job_id in job_ids:
+                orig_job_id = job_id.split('_')[-1]
+                job = queue.fetch_job(job_id)
+                if not job or not job.args:
+                    continue
+                if job_id_filter and job_id_filter != orig_job_id:
+                    continue
+                if orig_job_id not in job_created:
+                    job_created[orig_job_id] = job.created_at
+                repo = get_repo_from_payload(job.args[0])
+                ref_type = get_ref_type_from_payload(job.args[0])
+                ref = get_ref_from_payload(job.args[0])
+                event = get_event_from_payload(job.args[0])
+                if (repo_filter and repo_filter != repo) \
+                    or (ref_filter and ref_filter != ref) \
+                    or (event_filter and event_filter != event):
+                    continue
+                r_data[q_name][orig_job_id] = {
+                    "job_id": orig_job_id,
+                    "created_at": job.created_at,
+                    "enqueued_at": job.enqueued_at,
+                    "started_at": job.started_at,
+                    "ended_at": job.ended_at,
+                    "is_scheduled": job.is_scheduled,
+                    "is_queued": job.is_queued,
+                    "is_started": job.is_started,
+                    "is_finished": job.is_finished,
+                    "is_failed": job.is_failed,
+                    "is_canceled": job.is_canceled,
+                    "status": job.get_status(),
+                    "repo": repo,
+                    "ref_type": ref_type,
+                    "ref": ref,
+                    "event": event,
+                }
+        reverse_ordered_job_ids = sorted(job_created.keys(), key=lambda id: job_created[id], reverse=True)
+        for i, orig_job_id in enumerate(reverse_ordered_job_ids):
+            html += f'<tr class="table-{reg_colors[r_name]}"><th scope="row" style="vertical-align: top">{r_name.capitalize() if i == 0 else "&nbsp;"}</th>'
+            for q_name in queue_names:
+                html += '<td style="vertical-align:top">'
+                if orig_job_id in r_data[q_name]:
+                    html += get_job_list_html(r_data[q_name][orig_job_id])
+                else:
+                    html += "&nbsp;"
+                html += '</td>'
+            html += '</tr>'
+    html += '</table>'
+    results = {'table': html}
+    return jsonify(results)
 
 
 @app.route('/'+WEBHOOK_URL_SEGMENT+"status/job/<job_id>", methods=['GET'])
@@ -308,6 +323,69 @@ def clearCanceled():
             job = queue.fetch_job(job_id)
             job.delete()
     return "Canceled jobs cleared"
+
+
+#### FUNCS FOR GENERATING TABLE
+
+def get_job_map(job_id_filter=None, repo_filter=None, ref_filter=None, event_filter=None, show_canceled=False):
+    job_map = {}
+
+    def add_to_job_map(queue_name, registry_name, job):
+        if not job or not job.args:
+            return
+        repo = get_repo_from_payload(job.args[0])
+        ref = get_ref_from_payload(job.args[0])
+        event = get_event_from_payload(job.args[0])
+        job_id = job.id.split('_')[-1]
+
+        if (job_id_filter and job_id_filter != job_id) \
+            or (repo_filter and repo_filter != repo) \
+            or (ref_filter and ref_filter != ref) \
+            or (event_filter and event_filter != event):
+            return
+
+        canceled = job.args[0]["canceled"] if "canceled" in job.args[0] else []
+        if job_id not in job_map[queue_name][registry_name]:
+            job_map[queue_name][registry_name][job_id] = {}
+        job_map[queue_name][registry_name][job_id]["job"] = job
+        job_map[queue_name][registry_name][job_id]["canceled"] = canceled
+
+        for qn in job_map:
+            for rn in job_map[qn]:
+                for id in job_map[qn][rn]:
+                    j = job_map[qn][rn][id]["job"]
+                    c = job_map[qn][rn][id]["canceled"] if "canceled" in job_map[qn][rn][id]["job"].args[0] else []
+                    if id != job_id and (job.is_canceled or j.is_canceled):
+                        if id in canceled:
+                            job_map[qn][rn][id]["canceled_by"] = job_id
+                        elif job_id in c:
+                            job_map[queue_name][registry_name][job_id]["canceled_by"] = id
+
+    for queue_name in queue_names:
+        queue = Queue(PREFIX + queue_name, connection=redis_connection)
+        job_map[queue_name] = {}
+        for registry_name in registry_names:
+            job_map[queue_name][registry_name] = {}
+        for id in queue.scheduled_job_registry.get_job_ids():
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+                add_to_job_map(queue_name, "scheduled", queue.fetch_job(id))
+        for job in queue.get_jobs():
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+                add_to_job_map(queue_name, "enqueued", job)
+        for id in queue.started_job_registry.get_job_ids():
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+               add_to_job_map(queue_name, "started", queue.fetch_job(id))
+        for id in queue.finished_job_registry.get_job_ids():
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+                add_to_job_map(queue_name, "finished", queue.fetch_job(id))
+        for id in queue.failed_job_registry.get_job_ids():
+            if not job_id_filter or job_id_filter == id.split('_')[-1]:
+                add_to_job_map(queue_name, "failed", queue.fetch_job(id))
+        if show_canceled:
+            if not job_id_filter or job_id_filter == id:
+                for id in queue.canceled_job_registry.get_job_ids():
+                    add_to_job_map(queue_name, "canceled", queue.fetch_job(id))
+    return job_map
 
 
 def get_queue_job_info_html(queue_name, registry_name, job_info):
@@ -412,26 +490,26 @@ def get_relative_time(start=None, end=None):
     return f"{ago}{t}"
 
 
-def get_job_list_html(job):
-    job_id = job.id.split('_')[-1]
-    html = f'<a href="job/{job_id}">{job_id[:5]}</a>: {get_job_list_filter_link(job)}<br/>'
-    if job.ended_at:
-        timeago = f'{get_relative_time(job.ended_at)} ago'
-        runtime = get_relative_time(job.started_at, job.ended_at)
-        end_word = "canceled" if job.is_canceled else "failed" if job.is_failed else "finished"
-        html += f'<div style="padding-left:5px;font-style:italic;" title="started: {job.started_at.strftime("%Y-%m-%d %H:%M:%S")}; {end_word}: {job.ended_at.strftime("%Y-%m-%d %H:%M:%S")}">ran for {runtime}, {end_word} {timeago}</div>'
-    elif job.is_started:
-        timeago = f'{get_relative_time(job.started_at)} ago'
-        html += f'<div style="padding-left:5px;font-style:italic"  title="started: {job.started_at.strftime("%Y-%m-%d %H:%M:%S")}">started {timeago}</div>'
-    elif job.is_queued:
-        timeago = f'{get_relative_time(job.enqueued_at)}'
-        html += f'<div style="padding-left:5px;font-style:italic;" title="queued: {job.enqueued_at.strftime("%Y-%m-%d %H:%M:%S")}">queued for {timeago}</div>'
-    elif job.get_status(True) == "scheduled":
-        timeago = f'{get_relative_time(job.created_at)}'
-        html += f'<div style="padding-left:5px;font-style:italic;" title="scheduled: {job.created_at.strftime("%Y-%m-%d %H:%M:%S")}">schedued for {timeago}</div>'
+def get_job_list_html(job_data):
+    job_id = job_data["job_id"]
+    html = f'<a href="job/{job_id}">{job_id[:5]}</a>: {get_job_list_filter_link(job_data)}<br/>'
+    if job_data["ended_at"]:
+        timeago = f'{get_relative_time(job_data["ended_at"])} ago'
+        runtime = get_relative_time(job_data["started_at"], job_data["ended_at"])
+        end_word = "canceled" if job_data["is_canceled"] else "failed" if job_data["is_failed"] else "finished"
+        html += f'<div style="padding-left:5px;font-style:italic;" title="started: {job_data["started_at"].strftime("%Y-%m-%d %H:%M:%S")}; {end_word}: {job_data["ended_at"].strftime("%Y-%m-%d %H:%M:%S")}">ran for {runtime}, {end_word} {timeago}</div>'
+    elif job_data["is_started"]:
+        timeago = f'{get_relative_time(job_data["started_at"])} ago'
+        html += f'<div style="padding-left:5px;font-style:italic"  title="started: {job_data["started_at"].strftime("%Y-%m-%d %H:%M:%S")}">started {timeago}</div>'
+    elif job_data["is_queued"]:
+        timeago = f'{get_relative_time(job_data["enqueued_at"])}'
+        html += f'<div style="padding-left:5px;font-style:italic;" title="queued: {job_data["enqueued_at"].strftime("%Y-%m-%d %H:%M:%S")}">queued for {timeago}</div>'
+    elif job_data["is_scheduled"]:
+        timeago = f'{get_relative_time(job_data["created_at"])}'
+        html += f'<div style="padding-left:5px;font-style:italic;" title="scheduled: {job_data["created_at"].strftime("%Y-%m-%d %H:%M:%S")}">schedued for {timeago}</div>'
     else:
-        timeago = f'{get_relative_time(job.created_at)} ago'
-        html += f'<div style="padding-left:5px;font-style:italic;" title="created: {job.created_at.strftime("%Y-%m-%d %H:%M:%S")}">created {timeago}, status: {job.get_status()}</div>'
+        timeago = f'{get_relative_time(job_data["created_at"])} ago'
+        html += f'<div style="padding-left:5px;font-style:italic;" title="created: {job_data["created_at"].strftime("%Y-%m-%d %H:%M:%S")}">created {timeago}, status: {job_data["status"]}</div>'
     return html
 
 
@@ -485,11 +563,11 @@ def get_event_from_payload(payload):
         return 'push'
 
 
-def get_job_list_filter_link(job):
-    repo = get_repo_from_payload(job.args[0])
-    ref = get_ref_from_payload(job.args[0])
-    event = get_event_from_payload(job.args[0])
-    return f'<a href="?repo={repo}" title="{repo}">{repo.split("/")[-1]}&#128172;</a>=><a href="?repo={repo}&ref={ref}">{ref}</a>=><a href="?repo={repo}&ref={ref}&event={event}">{event}</a>'
+def get_job_list_filter_link(job_data):
+    repo = job_data["repo"]
+    ref = job_data["ref"]
+    event = job_data["event"]
+    return f'<a href="javascript:void(0)" onClick="filterTable(\'{repo}\')" title="{repo}">{repo.split("/")[-1]}&#128172;</a>=><a href="javascript:void(0)" onClick="filterTable(\'{repo}\', \'{ref}\')">{ref}</a>=><a href="javascript:void(0)" onClick="filterTable(\'{repo}\', \'{ref}\', \'{event}\')">{event}</a>'
 
 
 def get_dcs_link(job):
@@ -504,6 +582,7 @@ def get_dcs_link(job):
         return f'<a href="https://git.door43.org/{repo}/src/{ref_type}/{ref}" target="_blank" title="{repo}/src/{type}/{ref}">{text}</a>'
     else:
         return text
+
 
 # If a job has the same repo.full_name and ref that is already scheduled or queued, we cancel it so this one takes precedence
 def cancel_similar_jobs(incoming_payload):
@@ -543,60 +622,7 @@ def cancel_similar_jobs(incoming_payload):
 # end of cancel_similar_jobs function
 
 
-#####
-##### DO NOT COPY BELOW HERE
-#####
-
-def queue_new_job(response_dict):
-    if not response_dict or "ref" not in response_dict or "repository" not in response_dict:
-        return None
-
-    cancel_similar_jobs(response_dict)
-
-    try:
-        queue = Queue("door43_job_handler", connection=redis_connection)
-        if 'ref' in response_dict and "refs/tags" not in response_dict['ref'] and "master" not in response_dict['ref'] and response_dict["DCS_event"] == "push":
-            job = queue.enqueue_in(timedelta(seconds=10), "webhook.job", response_dict, result_ttl=(60*60*24))
-        else:
-            job = queue.enqueue("webhook.job", response_dict, result_ttl=(60*60*24))
-        return job
-    except Exception as e:
-        print("Failed to queue", file=sys.stderr)
-        print(e, file=sys.stderr)
-
-
-@app.route('/'+WEBHOOK_URL_SEGMENT, methods=['POST'])
-def job_receiver():
-    if not request.data:
-        print("Received request but no payload found", file=sys.stderr)
-        return jsonify({'error': 'No payload found. You must submit a POST request via a DCS webhook notification.'}), 400
-
-    # Bail if this is not from DCS
-    if 'X-Gitea-Event' not in request.headers:
-        print(f"No 'X-Gitea-Event' in {request.headers}", file=sys.stderr)
-        return jsonify({'error': 'This does not appear to be from DCS.'}), 400
-
-    event_type = request.headers['X-Gitea-Event']
-    logger.error(f"Got a '{event_type}' event from DCS")
-
-    # Get the json payload and check it
-    payload = request.get_json()
-    payload["DCS_event"] = event_type
-    job = queue_new_job(payload)
-    if job:
-        return_dict = {'success': True,
-                       'job_id': job.id,
-                        'status': 'queued',
-                        'queue_name': "door43_job_handler",
-                       'door43_job_queued_at': datetime.utcnow()}
-        return jsonify(return_dict)
-    else:
-        return jsonify({'error': 'Failed to queue job. See logs'}), 400    
-
-
-@app.route('/'+WEBHOOK_URL_SEGMENT, methods=['GET'])
-def homepage():
-    return 'Go to the  <a href="status/">status page</a>'
+#### COPY THIS AND ABOVE ONLY!!!! ######
 
 
 if __name__ == "__main__":
