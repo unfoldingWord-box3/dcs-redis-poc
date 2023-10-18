@@ -136,7 +136,7 @@ def status_page():
   return render_template('index.html', payload=payload, repo=repo, ref=ref, event=event, job_id=job_id)
 
 
-@app.route('/get_status_table', methods=['POST'])
+@app.route('/get_status_table_rows', methods=['POST'])
 def get_status_table():
     status_data = request.get_json()
     repo_filter = status_data['repo']
@@ -151,14 +151,13 @@ def get_status_table():
     # db.session.commit()
     # numJobs = db.session.query(StoreSearchData).count()
 
-    html = '<table class="table"><tr class="table-dark"><th scope="col" style="vertical-align:top">Queue:</th>'
-    for i, q_name in enumerate(queue_names):
-        html += f'<th scope="col" style="vertical-align:top">{q_name}{"&rArr;tx" if i==0 else "&rArr;callback" if i<(len(queue_names)-1) else ""}</th>'
-    html += '</tr><tr class="table-secondary"><th scope="col" style="vertical-align:bottom">Status&#8628;</th>'
-    for q_name in queue_names:
-        html += f'<td style="font-style: italic;font-size:0.8em;vertical-align:top">{queue_desc[q_name]}</td>'
-    html += '</tr></thead>'
+    table_rows = {}
     for r_name in registry_names:
+        table_rows[r_name] = {
+            "name": r_name,
+            "color": reg_colors[r_name],
+            "rows": [],
+        }   
         if r_name == "canceled" and not show_canceled:
             continue
         r_data = {}
@@ -216,19 +215,18 @@ def get_status_table():
         reverse_ordered_job_ids = sorted(job_created.keys(), key=lambda id: job_created[id], reverse=True)
         if len(reverse_ordered_job_ids) == 0:
             continue
-        html += f'<tr class="table-{reg_colors[r_name]} accordion-toggle" data-bs-toggle="collapse" data-bs-target=".{r_name}Row" href=".{r_name}Row" role="button" aria-expanded="false" aria-controls="{r_name}Row"><th scope="row" style="vertical-align: top"colspan="{len(queue_names)+1}"><button type="button" class="btn" style="font-weight:bold">{r_name.capitalize()}</button></th></tr>'
         for orig_job_id in reverse_ordered_job_ids:
-            html += f'<tr class="table-{reg_colors[r_name]} collapse {r_name}Row"><td scope="row">&nbsp;</th>'
+            row_html = f'<tr class="table-{reg_colors[r_name]} {r_name}Row" aria-labelledby="{r_name}HeaderRow" data-parent="#{r_name}HeaderRow"><td scope="row">&nbsp;</th>'
             for q_name in queue_names:
-                html += '<td style="vertical-align:top">'
+                row_html += '<td style="vertical-align:top">'
                 if orig_job_id in r_data[q_name]:
-                    html += get_job_list_html(r_data[q_name][orig_job_id])
+                    row_html += get_job_list_html(r_data[q_name][orig_job_id])
                 else:
-                    html += "&nbsp;"
-                html += '</td>'
-            html += '</tr>'
-    html += '</table>'
-    results = {'table': html}
+                    row_html += "&nbsp;"
+                row_html += '</td>'
+            row_html += '</tr>'
+            table_rows[r_name]["rows"].append(row_html)
+    results = {'table_rows': table_rows}
     return jsonify(results)
 
 
