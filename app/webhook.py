@@ -32,7 +32,7 @@ def job2(payload):
     myJob = get_current_job(redis_connection)
     converter = Converter(myJob.id, 10)
     url = converter.run()
-    callback_queue.enqueue("webhook.job3", payload, job_id="door43_job_handler_callback_"+myJob.id, result_ttl=(60*60*24))
+    callback_queue.enqueue("webhook.job3", payload, job_id="door43_job_handler_callback_"+myJob.id.split('_')[-1], result_ttl=(60*60*24))
     return url
 
 
