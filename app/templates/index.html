@@ -5,6 +5,7 @@
   <title>tX Pipeline Queue Status</title>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" integrity="sha512-z3gLpd7yknf1YoNbCzqRKc4qyor8gaKU1qmn+CShxbuBusANI9QpRohGBreCFkKxLhei6S9CQXFEbbKuqLg0DA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"
     integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
@@ -26,7 +27,8 @@
       <br />
       <hr />
     </form>
-    <div id="status-message"><b>To Start: Enter filter criteria (optional) and click "GO!"</b></div>
+    <div id="status-message"></div>
+    <div id="start-message"><b>To Start: Enter filter criteria (optional) and click "GO!"</b></div>
     <hr />
     <form id="filter-form">
       <b>Filter:</b>
@@ -105,8 +107,11 @@
                   Finished
                 </button>
               </th>
-              <td colspan="5" style="font-style:italic; vertical-align: middle;">
+              <td colspan="4" style="font-style:italic; vertical-align: middle;">
                 <span id="finishedCount">0 jobs</span> in the last 24 hours
+              </td>
+              <td style="font-style:italic; vertical-align: middle;">
+                <button id="removeFinishedButton" onClick="removeFinished()">Remove old finished jobs</button>
               </td>
             </tr>
             <tr id="failedHeaderRow" class="table-danger">
@@ -115,8 +120,11 @@
                   Failed
                 </button>
               </th>
-              <td colspan="5" style="font-style:italic; vertical-align: middle;">
+              <td colspan="4" style="font-style:italic; vertical-align: middle;">
                 <span id="failedCount">0 jobs</span>
+              </td>
+              <td style="font-style:italic; vertical-align: middle;">
+                <button id="remnoveFinishedButton" onClick="removeFailed()">Remove old failed jobs</button>
               </td>
             </th>
             </tr>
@@ -126,8 +134,11 @@
                   Canceled
                 </button>
               </th>
-              <td colspan="5" style="font-style:italic; vertical-align: middle;">
+              <td colspan="4" style="font-style:italic; vertical-align: middle;">
                 <span id="canceledCount">0</span> jobs
+              </td>
+              <td style="font-style:italic; vertical-align: middle;">
+                <button id="removeFinishedButton" onClick="removeCanceled()">Remove old canceled jobs</button>
               </td>
             </tr>
           </tbody>
