@@ -2,12 +2,11 @@ import os
 import redis
 import logging
 import json
+from datetime import datetime, timedelta
 from flask import Flask, render_template, url_for, request, jsonify, session
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
 from rq import Queue
 from rq.registry import FailedJobRegistry
-from datetime import datetime, timedelta
 
 PREFIX = ""
 WEBHOOK_URL_SEGMENT = ""
@@ -19,7 +18,6 @@ PREFIXED_LOGGING_NAME = PREFIX + LOGGING_NAME
 
 logger = logging.getLogger(PREFIXED_LOGGING_NAME)
 basedir = os.path.abspath(os.path.dirname(__file__))
-logger.error(basedir)
 redis_connection = redis.Redis(host='redis', port=6379, db=0)
 
 app = Flask(__name__)
@@ -67,7 +65,7 @@ def job_receiver():
                        'job_id': job.id,
                         'status': 'queued',
                         'queue_name': "door43_job_handler",
-                       'door43_job_queued_at': datetime.utcnow()}
+                       'door43_job_queued_at': datetime.now()}
         return jsonify(return_dict)
     else:
         return jsonify({'error': 'Failed to queue job. See logs'}), 400    
@@ -153,18 +151,20 @@ def get_status_table():
         for q_name in queue_names:
             r_data[q_name] = {}
             queue = Queue(PREFIX+q_name, connection=redis_connection)
+
             if r_name == "scheduled":
                 job_ids = queue.scheduled_job_registry.get_job_ids()
-            if r_name == "enqueued":
+            elif r_name == "enqueued":
                 job_ids = queue.get_job_ids()
-            if r_name == "started":
+            elif r_name == "started":
                 job_ids = queue.started_job_registry.get_job_ids()
-            if r_name == "finished":
+            elif r_name == "finished":
                 job_ids = queue.finished_job_registry.get_job_ids()
-            if r_name == "failed":
+            elif r_name == "failed":
                 job_ids = queue.failed_job_registry.get_job_ids()
-            if r_name == "canceled":
+            elif r_name == "canceled":
                 job_ids = queue.canceled_job_registry.get_job_ids()
+
             for job_id in job_ids:
                 orig_job_id = job_id.split('_')[-1]
                 job = queue.fetch_job(job_id)
@@ -274,8 +274,6 @@ def getJob(job_id):
                     job_data["canceled_by"] = orig_id
         job_datas.append(job_data)
 
-    logger.error(job_datas)
-
     html = f'<p><a href="../" style="text-decoration:none">&larr; Go back</a></p>'
 
     if len(job_datas) == 0:
@@ -323,21 +321,25 @@ def getJob(job_id):
 
 @app.route('/'+WEBHOOK_URL_SEGMENT+"status/clear/failed", methods=['GET'])
 def clearFailed():
+    hours = request.args.get("hours", 24)
     for queue_name in queue_names:
         queue = Queue(queue_name, connection=redis_connection)
         for job_id in queue.failed_job_registry.get_job_ids():
             job = queue.fetch_job(job_id)
-            job.delete()
+            if job and (datetime.now() - job.ended_at) >= timedelta(hours=hours):
+                job.delete()
     return "Failed jobs cleared"
 
 
 @app.route('/'+WEBHOOK_URL_SEGMENT+"status/clear/canceled", methods=['GET'])
 def clearCanceled():
+    hours = request.args.get("hours", 3)
     for queue_name in queue_names:
         queue = Queue(queue_name, connection=redis_connection)
         for job_id in queue.canceled_job_registry.get_job_ids():
             job = queue.fetch_job(job_id)
-            job.delete()
+            if job and (datetime.now() - job.created_at) >= timedelta(hours=hours):
+                job.delete()
     return "Canceled jobs cleared"
 
 
@@ -349,7 +351,7 @@ def get_queue_job_info_html(job_data):
     if job_data["created_at"]:
         html += f'<b>Created at:</b> {job_data["created_at"].strftime("%Y-%m-%d %H:%M:%S")}<br/>'
     if job_data["enqueued_at"]:
-        html += f'<b>Enqued at:</b> {job_data["enqueued_at"].strftime("%Y-%m-%d %H:%M:%S")}{f" (Position: {job.get_position()+1})" if job_data["is_queued"] else ""}<br/>'
+        html += f'<b>Enqued at:</b> {job_data["enqueued_at"].strftime("%Y-%m-%d %H:%M:%S")}<br/>'
     if job_data["started_at"]:
         html += f'<b>Started:</b> {job_data["started_at"].strftime("%Y-%m-%d %H:%M:%S")}<br/>'
     if job_data["ended_at"]:
@@ -368,7 +370,7 @@ def get_queue_job_info_html(job_data):
         try:
             html += json.dumps(job_data["payload"], indent=2)
         except:
-            html += job_data["payload"]
+            html += f'{job_data["payload"]}'
         html += f'</textarea>'
     if job_data["queue_name"] == DOOR43_JOB_HANDLER_QUEUE_NAME:
         html += '''<br/><br/>
@@ -424,7 +426,7 @@ def get_elapsed_time(start, end):
 
 def get_relative_time(start=None, end=None):
     if not end:
-        end = datetime.utcnow()
+        end = datetime.now()
     if not start:
         start = end
     ago = round((end - start).total_seconds())
