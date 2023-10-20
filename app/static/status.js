@@ -91,6 +91,7 @@ function filterTable(repo, ref, dcs_event) {
     },
     complete: function (result) {
       $loading.hide();
+      $('[data-toggle="tooltip"]').tooltip();
     },
   });
 }
@@ -149,9 +150,6 @@ function queueJob() {
       console.log("ERROR!");
       console.log(result);
       alert(result);
-    },
-    complete: function (result) {
-      $loading.hide();
     },
   });
 }
