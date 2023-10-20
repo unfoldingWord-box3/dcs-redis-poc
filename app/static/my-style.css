@@ -3,3 +3,7 @@
 #status-container, #queue-form, #filter-form {
     padding: 15px;
 }
+
+/* #queue-form-wrapper {
+    display: none;
+} */
